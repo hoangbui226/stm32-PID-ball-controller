@@ -46,10 +46,13 @@ TIM_HandleTypeDef htim3;
 /* USER CODE BEGIN PV */
 static const int min_pixels = 80;
 static const int max_misses = 3;
+static const int deadband = 4;
 static int ball_x = 160;
 static int ball_y = 120;
 static int ball_count = 0;
 static int miss_count = 0;
+static int err_x = 0;
+static int err_y = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -84,10 +87,10 @@ static void servos_set_deg(uint8_t a, uint8_t b, uint8_t c)
 
 static void servos_startup(void) {
 	servos_set_deg(120, 120, 120);
-	HAL_Delay(800);
-	servos_set_deg(60, 60, 60);
-	HAL_Delay(800);
-	servos_set_deg(100,100,100);
+	HAL_Delay(500);
+	servos_set_deg(30, 30, 30);
+	HAL_Delay(500);
+	servos_set_deg(62,62,62);
 }
 
 /* ESP32 GPIO1 TX -> PA10 D2 USART1 RX. */
@@ -196,8 +199,8 @@ static void uart_poll(void)
         if (read_sample(line, &x, &y, &count)) {
           ball_count = count;
           if (ball_count >= min_pixels) { // filter out noise
-            ball_x = x;
-            ball_y = y;
+            ball_x += (x - ball_x) * 3 / 10;
+            ball_y += (y - ball_y) * 3 / 10;
             miss_count = 0;
           } else {
             miss_count++;
@@ -206,6 +209,14 @@ static void uart_poll(void)
               ball_y = 120;
               miss_count = 0;
             }
+          }
+          err_x = ball_x - 160;
+          err_y = ball_y - 120;
+          if (err_x >= -deadband && err_x <= deadband) {
+            err_x = 0;
+          }
+          if (err_y >= -deadband && err_y <= deadband) {
+            err_y = 0;
           }
           uart_write_int(ball_x);
           uart_tx(' ');
