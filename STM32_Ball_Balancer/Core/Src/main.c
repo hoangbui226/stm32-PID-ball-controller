@@ -21,7 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "ik.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -64,7 +64,8 @@ static void MX_TIM3_Init(void);
 static void servos_set_deg(uint8_t a, uint8_t b, uint8_t c);
 static void servos_startup(void);
 static void uart_cam_init(void);
-static void uart_poll(void);
+static int uart_poll(void);
+static void ik_report(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -86,10 +87,10 @@ static void servos_set_deg(uint8_t a, uint8_t b, uint8_t c)
 }
 
 static void servos_startup(void) {
-	servos_set_deg(120, 120, 120);
-	HAL_Delay(500);
+	servos_set_deg(95, 95, 95);
+	HAL_Delay(150);
 	servos_set_deg(30, 30, 30);
-	HAL_Delay(500);
+	HAL_Delay(150);
 	servos_set_deg(62,62,62);
 }
 
@@ -183,10 +184,47 @@ static int read_sample(const char *text, int *x, int *y, int *count)
   return 1;
 }
 
-static void uart_poll(void)
+static void uart_write_hundredths(float value)
+{
+  int scaled;
+
+  if (value < 0.0f) {
+    uart_tx('-');
+    value = -value;
+  }
+  scaled = (int)(value * 100.0f + 0.5f);
+  uart_write_int(scaled / 100);
+  uart_tx('.');
+  uart_tx((char)('0' + (scaled / 10) % 10));
+  uart_tx((char)('0' + (scaled % 10)));
+}
+
+static void ik_report(void)
+{
+  float deg1;
+  float deg2;
+  float deg3;
+
+  if (!ik_solve(0.0f, 0.0f, &deg1, &deg2, &deg3)) {
+    return;
+  }
+  uart_tx('i');
+  uart_tx('k');
+  uart_tx(' ');
+  uart_write_hundredths(deg1);
+  uart_tx(' ');
+  uart_write_hundredths(deg2);
+  uart_tx(' ');
+  uart_write_hundredths(deg3);
+  uart_tx('\r');
+  uart_tx('\n');
+}
+
+static int uart_poll(void)
 {
   static char line[24];
   static int length = 0;
+  int got = 0;
 
   while ((USART1->SR & USART_SR_RXNE) != 0) {
     char c = (char)(USART1->DR & 0xFF);
@@ -225,6 +263,7 @@ static void uart_poll(void)
           uart_write_int(ball_count);
           uart_tx('\r');
           uart_tx('\n');
+          got = 1;
         }
         length = 0;
       }
@@ -232,6 +271,7 @@ static void uart_poll(void)
       line[length++] = c;
     }
   }
+  return got;
 }
 /* USER CODE END 0 */
 
@@ -273,6 +313,7 @@ int main(void)
 
   servos_startup();
   uart_cam_init();
+  ik_report();
    /* USER CODE END 2 */
 
    
@@ -283,7 +324,9 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    uart_poll();
+    if (uart_poll()) {
+      ik_report();
+    }
   }
   /* USER CODE END 3 */
 }
