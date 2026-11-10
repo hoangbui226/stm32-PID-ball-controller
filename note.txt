@@ -1,0 +1,38 @@
+Ball balancer arm notation
+==========================
+
+Camera view (looking down on the plate):
+  - image +x = right
+  - image +y = down (bottom of the picture)
+
+Physical arms (from the camera):
+  - Arm A = bottom of the image
+  - Arm B = right of the image
+  - Arm C = left of the image
+
+IK outputs (ik_solve -> deg1, deg2, deg3):
+  - deg1 = 120 deg arm
+  - deg2 = +X arm
+  - deg3 = 240 deg arm
+
+STM32 PWM pins (servos_set_deg(a, b, c)):
+  - a = PA5 = D13
+  - b = PA6 = D12
+  - c = PA7 = D11
+
+Assigned mapping (code still calls servos_set_deg(deg1, deg2, deg3)):
+
+  Arm | Camera place | IK output | Plate angle | STM32 pin
+  ----+--------------+-----------+-------------+----------
+  A   | bottom       | deg1      | 120 deg     | D13 (PA5)
+  B   | right        | deg3      | 240 deg     | D11 (PA7)
+  C   | left         | deg2      | +X          | D12 (PA6)
+
+Wiring:
+  - Arm A servo signal -> D13
+  - Arm B servo signal -> D11
+  - Arm C servo signal -> D12
+
+Check:
+  - Ball on the left/right of the image -> Arm C (D12, +X / deg2) should be the main X mover.
+  - If A and B lean the wrong way, swap D13 and D11.

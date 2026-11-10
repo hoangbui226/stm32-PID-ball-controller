@@ -229,6 +229,20 @@ def take_frame(buf: bytearray):
         return img
 
 
+def lift_corners(hsv):
+    """The lens dims the corners. Raise value there so the same v_min still matches the ball."""
+    height, width = hsv.shape[:2]
+    y, x = np.ogrid[0:height, 0:width]
+    dx = (x - (width - 1) / 2) / ((width - 1) / 2)
+    dy = (y - (height - 1) / 2) / ((height - 1) / 2)
+    dist = np.sqrt(dx * dx + dy * dy)
+    gain = 1.0 + 0.5 * np.minimum(dist, 1.0)
+    lifted = hsv.copy()
+    value = lifted[:, :, 2].astype(np.float32) * gain
+    lifted[:, :, 2] = np.clip(value, 0, 255).astype(np.uint8)
+    return lifted
+
+
 def find_ball(mask, min_r, max_r):
     kernel = np.ones((3, 3), np.uint8)
     mask = cv2.erode(mask, kernel, iterations=1)
@@ -317,7 +331,7 @@ def main():
             if latest is not None:
                 img = latest
                 (r, g, b, r0, r1, g0, g1, b0, b1), box_x, box_y, box = center_stats(img)
-                hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+                hsv = lift_corners(cv2.cvtColor(img, cv2.COLOR_BGR2HSV))
                 lower = np.array([values["h_min"], values["s_min"], values["v_min"]], np.uint8)
                 upper = np.array([values["h_max"], values["s_max"], values["v_max"]], np.uint8)
                 mask = cv2.inRange(hsv, lower, upper)

@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "ik.h"
+#include "pid.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -44,13 +45,11 @@ TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 
 /* USER CODE BEGIN PV */
-static const int min_pixels = 80;
-static const int max_misses = 3;
-static const int deadband = 4;
+static const int kMinCount = 1000;
+static const int deadband = 20;
 static int ball_x = 160;
 static int ball_y = 120;
 static int ball_count = 0;
-static int miss_count = 0;
 static int err_x = 0;
 static int err_y = 0;
 /* USER CODE END PV */
@@ -64,8 +63,9 @@ static void MX_TIM3_Init(void);
 static void servos_set_deg(uint8_t a, uint8_t b, uint8_t c);
 static void servos_startup(void);
 static void uart_cam_init(void);
+static int filter_x_y(int x, int y, int count);
 static int uart_poll(void);
-static void ik_report(void);
+static uint8_t float_to_deg(float degrees);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -184,40 +184,39 @@ static int read_sample(const char *text, int *x, int *y, int *count)
   return 1;
 }
 
-static void uart_write_hundredths(float value)
+static uint8_t float_to_deg(float degrees)
 {
-  int scaled;
+  int rounded;
 
-  if (value < 0.0f) {
-    uart_tx('-');
-    value = -value;
+  if (degrees < 0.0f) {
+    return 0;
   }
-  scaled = (int)(value * 100.0f + 0.5f);
-  uart_write_int(scaled / 100);
-  uart_tx('.');
-  uart_tx((char)('0' + (scaled / 10) % 10));
-  uart_tx((char)('0' + (scaled % 10)));
+  rounded = (int)(degrees + 0.5f);
+  if (rounded > 180) {
+    return 180;
+  }
+  return (uint8_t)rounded;
 }
 
-static void ik_report(void)
+/* Keep a sample only when count > 1000. Otherwise leave ball_x / ball_y alone. */
+static int filter_x_y(int x, int y, int count)
 {
-  float deg1;
-  float deg2;
-  float deg3;
-
-  if (!ik_solve(0.0f, 0.0f, &deg1, &deg2, &deg3)) {
-    return;
+  ball_count = count;
+  if (count <= kMinCount) {
+    return 0;
   }
-  uart_tx('i');
-  uart_tx('k');
-  uart_tx(' ');
-  uart_write_hundredths(deg1);
-  uart_tx(' ');
-  uart_write_hundredths(deg2);
-  uart_tx(' ');
-  uart_write_hundredths(deg3);
-  uart_tx('\r');
-  uart_tx('\n');
+
+  ball_x += (x - ball_x) * 6 / 10;
+  ball_y += (y - ball_y) * 6 / 10;
+  err_x = ball_x - 160;
+  err_y = ball_y - 120;
+  if (err_x >= -deadband && err_x <= deadband) {
+    err_x = 0;
+  }
+  if (err_y >= -deadband && err_y <= deadband) {
+    err_y = 0;
+  }
+  return 1;
 }
 
 static int uart_poll(void)
@@ -235,26 +234,8 @@ static int uart_poll(void)
         int count = 0;
         line[length] = '\0';
         if (read_sample(line, &x, &y, &count)) {
-          ball_count = count;
-          if (ball_count >= min_pixels) { // filter out noise
-            ball_x += (x - ball_x) * 3 / 10;
-            ball_y += (y - ball_y) * 3 / 10;
-            miss_count = 0;
-          } else {
-            miss_count++;
-            if (miss_count >= max_misses) {
-              ball_x = 160;
-              ball_y = 120;
-              miss_count = 0;
-            }
-          }
-          err_x = ball_x - 160;
-          err_y = ball_y - 120;
-          if (err_x >= -deadband && err_x <= deadband) {
-            err_x = 0;
-          }
-          if (err_y >= -deadband && err_y <= deadband) {
-            err_y = 0;
+          if (filter_x_y(x, y, count)) {
+            got = 1;
           }
           uart_write_int(ball_x);
           uart_tx(' ');
@@ -263,7 +244,6 @@ static int uart_poll(void)
           uart_write_int(ball_count);
           uart_tx('\r');
           uart_tx('\n');
-          got = 1;
         }
         length = 0;
       }
@@ -313,7 +293,6 @@ int main(void)
 
   servos_startup();
   uart_cam_init();
-  ik_report();
    /* USER CODE END 2 */
 
    
@@ -325,7 +304,20 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     if (uart_poll()) {
-      ik_report();
+      float theta_deg;
+      float phi_deg;
+      float deg1;
+      float deg2;
+      float deg3;
+
+      pid((float)err_x, (float)err_y, &theta_deg, &phi_deg);
+      phi_deg += 180.0f;
+      if (phi_deg >= 360.0f) {
+        phi_deg -= 360.0f;
+      }
+      if (ik_solve(theta_deg, phi_deg, &deg1, &deg2, &deg3)) {
+        servos_set_deg(float_to_deg(deg1), float_to_deg(deg2), float_to_deg(deg3));
+      }
     }
   }
   /* USER CODE END 3 */
