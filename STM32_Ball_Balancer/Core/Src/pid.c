@@ -7,8 +7,8 @@
 static volatile float kp = 0.020f;
 static volatile float ki = 0.00000f;
 static volatile float kd = 0.000f;
-static volatile float alpha = 0.8f;
-static volatile float beta = 0.45f;
+static volatile float alpha = 1.0f;
+static volatile float beta = 0.2f;
 
 static float prev_out_x;
 static float prev_out_y;
@@ -67,7 +67,7 @@ void pid(float err_x, float err_y, float *theta_deg, float *phi_deg)
     phi += 360.0f;
   }
   radius = sqrtf(filtered_x * filtered_x + filtered_y * filtered_y); 
-  *theta_deg = 17.0f * tanhf(beta * radius); // how much to tilt
+  *theta_deg = 15.0f * tanhf(beta * radius); // how much to tilt
   *phi_deg = phi;
 
   prev_err_x = err_x;

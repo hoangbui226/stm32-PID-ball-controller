@@ -46,7 +46,7 @@ TIM_HandleTypeDef htim3;
 
 /* USER CODE BEGIN PV */
 static const int kMinCount = 1000;
-static const int deadband = 20;
+static const int deadband = 10;
 static int ball_x = 160;
 static int ball_y = 120;
 static int ball_count = 0;
@@ -81,17 +81,17 @@ static uint16_t deg_to_us(uint8_t degrees)
 
 static void servos_set_deg(uint8_t a, uint8_t b, uint8_t c)
 {
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, deg_to_us(a)); /* PA5, D13 */
+  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, deg_to_us(a) + 20); /* PA5, D13 */
   __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, deg_to_us(b)); /* PA6, D12 */
   __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, deg_to_us(c)); /* PA7, D11 */
 }
 
 static void servos_startup(void) {
 	servos_set_deg(95, 95, 95);
-	HAL_Delay(150);
-	servos_set_deg(30, 30, 30);
-	HAL_Delay(150);
-	servos_set_deg(62,62,62);
+	HAL_Delay(200);
+	servos_set_deg(10, 10, 10);
+	HAL_Delay(200);
+	servos_set_deg(62, 62, 62);
 }
 
 /* ESP32 GPIO1 TX -> PA10 D2 USART1 RX. */
@@ -206,8 +206,8 @@ static int filter_x_y(int x, int y, int count)
     return 0;
   }
 
-  ball_x += (x - ball_x) * 6 / 10;
-  ball_y += (y - ball_y) * 6 / 10;
+  ball_x += (x - ball_x) * 10 / 10;
+  ball_y += (y - ball_y) * 10 / 10;
   err_x = ball_x - 160;
   err_y = ball_y - 120;
   if (err_x >= -deadband && err_x <= deadband) {

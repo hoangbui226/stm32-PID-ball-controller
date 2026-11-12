@@ -10,7 +10,7 @@
 
 // U0T / USB serial: the camera's own JPEG at 1500000 for view.py.
 // GPIO13: "x y count" at 115200 to STM32 PA10 (D2).
-// Orange is the first cut. Only a round blob near the predicted position is the ball.
+// Orange is the first cut. The ball is the biggest orange blob on the plate.
 static const int kPictureBaud = 1500000;
 static const int kStm32Baud = 115200;
 static const int kStm32TxPin = 13;
@@ -20,15 +20,12 @@ static const size_t kRgbBytes = 320 * 240 * 2;
 static const size_t kGrayBytes = 320 * 240;
 
 static const unsigned long kHoldMs = 3000;
-static const int kSearchRadius = 80;
-static const int kMaxVel = 40;
 static const int kMinRadius = 8;
 static const int kMaxRadius = 110;
 static const int kMinArea = 80;
 static const int kSeedCount = 8192;
 static const int kCenterX = 160;
 static const int kCenterY = 130;
-static const int kFullSearchMisses = 3;
 
 static const int h_min = 0;
 static const int h_max = 25;
@@ -93,16 +90,6 @@ static int isqrt(int n) {
     y = (x + n / x) / 2;
   }
   return x;
-}
-
-static int clampi(int v, int lo, int hi) {
-  if (v < lo) {
-    return lo;
-  }
-  if (v > hi) {
-    return hi;
-  }
-  return v;
 }
 
 static int lifted_value(int v, int dist) {
@@ -296,12 +283,10 @@ static void fill_blob(int x, int y, int width, int height, Blob *blob) {
   }
 }
 
-// Acquire is strict so a jumper is not the ball. Tracking is looser so a clipped rim still counts.
-static bool round_ball(const Blob *blob, int width, int height, bool tracking, int *cx, int *cy, int *diameter) {
+// Size only. A ball cut by the frame is still the ball, so shape is not tested.
+static bool ball_blob(const Blob *blob, int width, int height, int *cx, int *cy, int *diameter) {
   int w;
   int h;
-  int longer;
-  int shorter;
   int radius;
   int min_r = kMinRadius * width / 320;
   int max_r = kMaxRadius * width / 320;
@@ -312,14 +297,7 @@ static bool round_ball(const Blob *blob, int width, int height, bool tracking, i
   if (min_a < 20) {
     min_a = 20;
   }
-  if (tracking && min_a > 12) {
-    min_a = min_a / 2;
-  }
-  if (blob->area < min_a || blob->perim < 8) {
-    return false;
-  }
-  if (!tracking &&
-      (blob->min_x == 0 || blob->min_y == 0 || blob->max_x == width - 1 || blob->max_y == height - 1)) {
+  if (blob->area < min_a) {
     return false;
   }
   w = blob->max_x - blob->min_x + 1;
@@ -327,29 +305,6 @@ static bool round_ball(const Blob *blob, int width, int height, bool tracking, i
   radius = (w > h ? w : h) / 2;
   if (radius < min_r || radius > max_r) {
     return false;
-  }
-  longer = w > h ? w : h;
-  shorter = w < h ? w : h;
-  if (tracking) {
-    if (longer > shorter * 2) {
-      return false;
-    }
-    if (blob->area * 3 < w * h) {
-      return false;
-    }
-    if (314 * blob->area < 10 * blob->perim * blob->perim) {
-      return false;
-    }
-  } else {
-    if (longer * 2 > shorter * 3) {
-      return false;
-    }
-    if (blob->area * 2 < w * h) {
-      return false;
-    }
-    if (314 * blob->area < 15 * blob->perim * blob->perim) {
-      return false;
-    }
   }
   *cx = (int)(blob->sum_x / blob->area);
   *cy = (int)(blob->sum_y / blob->area);
@@ -375,42 +330,26 @@ static void paint_mask(int width, int height, int x0, int y0, int x1, int y1, bo
   dilate3(work, mask, width, height, x0, y0, x1, y1);
 }
 
-static bool find_round(int width, int height, int x0, int y0, int x1, int y1, int pred_x, int pred_y,
-                      bool nearest, bool tracking, int *out_x, int *out_y, int *out_d, int *out_area) {
-  int best_d2 = 0x7fffffff;
+static bool find_ball(int width, int height, int x0, int y0, int x1, int y1,
+                      int *out_x, int *out_y, int *out_d, int *out_area) {
   int best_area = 0;
   bool found = false;
-  paint_mask(width, height, x0, y0, x1, y1, tracking);
+  paint_mask(width, height, x0, y0, x1, y1, false);
   for (int y = y0; y < y1; y++) {
     for (int x = x0; x < x1; x++) {
       Blob blob;
       int cx;
       int cy;
       int diameter;
-      int dx;
-      int dy;
-      int d2;
       if (mask[y * width + x] != 1) {
         continue;
       }
       clear_blob(&blob, width, height);
       fill_blob(x, y, width, height, &blob);
-      if (!round_ball(&blob, width, height, tracking, &cx, &cy, &diameter)) {
+      if (!ball_blob(&blob, width, height, &cx, &cy, &diameter)) {
         continue;
       }
-      dx = cx - pred_x;
-      dy = cy - pred_y;
-      d2 = dx * dx + dy * dy;
-      if (nearest) {
-        if (d2 < best_d2) {
-          best_d2 = d2;
-          *out_x = cx;
-          *out_y = cy;
-          *out_d = diameter;
-          *out_area = blob.area;
-          found = true;
-        }
-      } else if (blob.area > best_area) {
+      if (blob.area > best_area) {
         best_area = blob.area;
         *out_x = cx;
         *out_y = cy;
@@ -522,10 +461,15 @@ static void downsample2(uint8_t *buf, int src_w, int src_h, int *dst_w, int *dst
   *dst_h = dh;
 }
 
-static void send_picture(const uint8_t *jpg, size_t jpg_len, int x, int y, int count, int diameter) {
+static bool send_picture(const uint8_t *jpg, size_t jpg_len, int x, int y, int count, int diameter) {
+  int header = 64;
+  if (Serial.availableForWrite() < (int)jpg_len + header) {
+    return false;
+  }
   uint32_t sum = checksum(jpg, jpg_len);
   Serial.printf("##FRAME %u %u %d %d %d %d\n", (unsigned)jpg_len, sum, x, y, count, diameter);
   Serial.write(jpg, jpg_len);
+  return true;
 }
 
 static void track_jpeg(const uint8_t *jpg, size_t len) {
@@ -533,12 +477,8 @@ static void track_jpeg(const uint8_t *jpg, size_t len) {
   static int center_y = 65;
   static int center_d = 0;
   static int center_area = 0;
-  static int vel_x = 0;
-  static int vel_y = 0;
-  static int miss_count = 0;
   static unsigned long lost_ms = 0;
   static bool ball_lost = false;
-  static bool have_lock = false;
 
   esp_jpeg_image_cfg_t cfg;
   esp_jpeg_image_output_t out;
@@ -546,40 +486,54 @@ static void track_jpeg(const uint8_t *jpg, size_t len) {
   int height;
   int scale_x;
   int scale_y;
-  int search;
-  int pred_x;
-  int pred_y;
-  int x0;
-  int y0;
-  int x1;
-  int y1;
   int pick_x = 0;
   int pick_y = 0;
   int pick_d = 0;
   int pick_area = 0;
   bool found = false;
 
-  memset(&cfg, 0, sizeof(cfg));
-  cfg.indata = (uint8_t *)jpg;
-  cfg.indata_size = len;
-  cfg.outbuf = rgb;
-  cfg.outbuf_size = kRgbBytes;
-  cfg.out_format = JPEG_IMAGE_FORMAT_RGB565;
-  cfg.out_scale = JPEG_IMAGE_SCALE_0;
-  cfg.flags.swap_color_bytes = 1;
-  cfg.advanced.working_buffer = jpeg_work;
-  cfg.advanced.working_buffer_size = sizeof(jpeg_work);
-  memset(&out, 0, sizeof(out));
-  if (rgb == nullptr || lift_half == nullptr || mask == nullptr || work == nullptr || seeds == nullptr ||
-      esp_jpeg_decode(&cfg, &out) != ESP_OK) {
+  if (rgb == nullptr || lift_half == nullptr || mask == nullptr || work == nullptr || seeds == nullptr) {
     return;
   }
-  width = out.width;
-  height = out.height;
-  if (width < 8 || height < 8 || width > 320 || height > 240) {
-    return;
+  bool half = true;
+  for (;;) {
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.indata = (uint8_t *)jpg;
+    cfg.indata_size = len;
+    cfg.outbuf = rgb;
+    cfg.outbuf_size = kRgbBytes;
+    cfg.out_format = JPEG_IMAGE_FORMAT_RGB565;
+    cfg.out_scale = half ? JPEG_IMAGE_SCALE_1_2 : JPEG_IMAGE_SCALE_0;
+    cfg.flags.swap_color_bytes = 1;
+    cfg.advanced.working_buffer = jpeg_work;
+    cfg.advanced.working_buffer_size = sizeof(jpeg_work);
+    memset(&out, 0, sizeof(out));
+    if (esp_jpeg_decode(&cfg, &out) != ESP_OK) {
+      if (!half) {
+        return;
+      }
+      half = false;
+      continue;
+    }
+    width = out.width;
+    height = out.height;
+    if (width < 8 || height < 8 || width > 320 || height > 240) {
+      if (!half) {
+        return;
+      }
+      half = false;
+      continue;
+    }
+    if (half && width == 160 && height == 120) {
+      break;
+    }
+    if (half) {
+      half = false;
+      continue;
+    }
+    downsample2(rgb, width, height, &width, &height);
+    break;
   }
-  downsample2(rgb, width, height, &width, &height);
   build_lift(width, height);
   scale_x = 320 / width;
   scale_y = 240 / height;
@@ -589,60 +543,32 @@ static void track_jpeg(const uint8_t *jpg, size_t len) {
   if (scale_y < 1) {
     scale_y = 1;
   }
-  search = kSearchRadius / scale_x;
-  if (search < 24) {
-    search = 24;
-  }
-
-  pred_x = clampi(center_x + vel_x, 0, width - 1);
-  pred_y = clampi(center_y + vel_y, 0, height - 1);
-
-  if (have_lock) {
-    x0 = clampi(pred_x - search, 0, width);
-    y0 = clampi(pred_y - search, 0, height);
-    x1 = clampi(pred_x + search, 0, width);
-    y1 = clampi(pred_y + search, 0, height);
-    found = find_round(width, height, x0, y0, x1, y1, pred_x, pred_y, true, true, &pick_x, &pick_y, &pick_d,
-                       &pick_area);
-  }
-  if (!found && (!have_lock || miss_count + 1 >= kFullSearchMisses)) {
-    found = find_round(width, height, 0, 0, width, height, pred_x, pred_y, have_lock, false, &pick_x, &pick_y, &pick_d,
-                       &pick_area);
-  }
+  found = find_ball(width, height, 0, 0, width, height, &pick_x, &pick_y, &pick_d, &pick_area);
 
   if (found) {
-    vel_x = clampi(pick_x - center_x, -kMaxVel / scale_x, kMaxVel / scale_x);
-    vel_y = clampi(pick_y - center_y, -kMaxVel / scale_y, kMaxVel / scale_y);
     center_x = pick_x;
     center_y = pick_y;
     center_d = pick_d;
     center_area = pick_area;
-    have_lock = true;
     ball_lost = false;
-    miss_count = 0;
   } else if (!ball_lost) {
     lost_ms = millis();
     ball_lost = true;
-    vel_x = 0;
-    vel_y = 0;
-    miss_count++;
   } else if ((unsigned long)(millis() - lost_ms) >= kHoldMs) {
     center_x = kCenterX * width / 320;
     center_y = kCenterY * height / 240;
     center_d = 0;
     center_area = 0;
-    vel_x = 0;
-    vel_y = 0;
-    miss_count = 0;
-    have_lock = false;
-  } else {
-    miss_count++;
   }
 
-  pub_x.store(center_x * scale_x, std::memory_order_relaxed);
-  pub_y.store(center_y * scale_y, std::memory_order_relaxed);
-  pub_count.store(center_area * scale_x * scale_y, std::memory_order_relaxed);
+  int sent_x = center_x * scale_x;
+  int sent_y = center_y * scale_y;
+  int sent_count = center_area * scale_x * scale_y;
+  pub_x.store(sent_x, std::memory_order_relaxed);
+  pub_y.store(sent_y, std::memory_order_relaxed);
+  pub_count.store(sent_count, std::memory_order_relaxed);
   pub_d.store(center_d * scale_x, std::memory_order_relaxed);
+  Serial1.printf("%d %d %d\n", sent_x, sent_y, sent_count);
 }
 
 static void publish_picture() {
@@ -686,7 +612,7 @@ static bool offer_frame(const uint8_t *jpg, size_t len) {
 }
 
 void setup() {
-  Serial.setTxBufferSize(8192);
+  Serial.setTxBufferSize(32768);
   Serial.begin(kPictureBaud);
   Serial1.begin(kStm32Baud, SERIAL_8N1, -1, kStm32TxPin);
   if (!start_camera()) {
@@ -710,10 +636,6 @@ void setup() {
 
 void loop() {
   camera_fb_t *fb = esp_camera_fb_get();
-  int x;
-  int y;
-  int count;
-  int diameter;
   if (fb == nullptr || fb->format != PIXFORMAT_JPEG) {
     if (fb != nullptr) {
       esp_camera_fb_return(fb);
@@ -722,11 +644,6 @@ void loop() {
   }
 
   offer_frame(fb->buf, fb->len);
-  x = pub_x.load(std::memory_order_relaxed);
-  y = pub_y.load(std::memory_order_relaxed);
-  count = pub_count.load(std::memory_order_relaxed);
-  diameter = pub_d.load(std::memory_order_relaxed);
-  Serial1.printf("%d %d %d\n", x, y, count);
   if (out_ready.load(std::memory_order_acquire) && out_jpg != nullptr) {
     send_picture(out_jpg, out_len, out_x, out_y, out_count, out_d);
     out_ready.store(false, std::memory_order_release);

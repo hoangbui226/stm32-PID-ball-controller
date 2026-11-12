@@ -117,7 +117,7 @@ def lift_corners(hsv):
 
 
 def ball_mask(image):
-    """Fast orange preview. Roundness is decided on the ESP32, not in this window."""
+    """Fast orange preview. The ESP32 picks the largest of these blobs."""
     hsv = lift_corners(cv2.cvtColor(image, cv2.COLOR_BGR2HSV))
     lower = np.array([H_MIN, S_MIN, V_MIN], np.uint8)
     upper = np.array([H_MAX, S_MAX, V_MAX], np.uint8)
